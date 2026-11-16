@@ -1,0 +1,14 @@
+{
+  "name": "Englisch lernen",
+  "short_name": "Englisch",
+  "description": "Englisch-Vokabeln und Sätze lernen mit Wiederholungssystem",
+  "lang": "de",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f6f8",
+  "theme_color": "#2f5d8a",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
