@@ -247,10 +247,20 @@ function enterPhase() {
   if (p === 'crossword') s.cw = cwMake(s.words);
   if (p === 'gap') s.queue = shuffle(s.words.filter(w => w.ex));
   if (p === 'sentences') {
+    // Immer 10 Sätze: zuerst die Lektionssätze, dann Beispielsätze der geübten Vokabeln,
+    // falls nötig aufgefüllt mit weiteren Beispielsätzen derselben Lektion(en)
+    const SENTENCES = 10;
     const lessonIds = [...new Set(s.words.map(w => w.lesson))];
-    const ls = shuffle(lessonIds.flatMap(id => LESSON[id].sentences || [])).slice(0, 2);
-    const exs = shuffle(s.words.filter(w => w.ex)).slice(0, 4 - ls.length).map(w => ({ en: exPlain(w.ex), de: w.exDe }));
-    s.queue = shuffle([...ls, ...exs]);
+    const fromLesson = shuffle(lessonIds.flatMap(id => LESSON[id].sentences || []));
+    const ex = w => ({ en: exPlain(w.ex), de: w.exDe });
+    const fromWords = shuffle(s.words.filter(w => w.ex)).map(ex);
+    const fromRest = shuffle(WORDS.filter(w => w.ex && lessonIds.includes(w.lesson) && !s.words.includes(w))).map(ex);
+    const seen = new Set(); const pick = [];
+    for (const x of [...fromLesson, ...fromWords, ...fromRest]) {
+      const k = norm(x.en); if (seen.has(k)) continue;
+      seen.add(k); pick.push(x); if (pick.length === SENTENCES) break;
+    }
+    s.queue = shuffle(pick);
     s.tries = 0;
   }
 }
