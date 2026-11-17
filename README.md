@@ -26,8 +26,9 @@ Private Lern-Web-App: Vokabeln und Sätze, ohne Spielereien, mit Wiederholungssy
 2. Paare finden – richtige Paare verschwinden
 3. Lernkarten: deutsches Wort → auf Englisch sagen (Spracherkennung, alternativ schreiben). Falsche kommen danach noch einmal, bis alle sitzen.
 4. Alle Paare noch einmal im Überblick
-5. Lückentext mit Beispielsätzen
-6. Sätze laut nachsprechen (mind. 80 % der Wörter müssen erkannt werden)
+5. Kreuzworträtsel mit bis zu 8 Vokabeln – Wörter ins Gitter ziehen oder antippen
+6. Lückentext mit Beispielsätzen – passendes Wort hineinziehen
+7. Sätze laut nachsprechen (mind. 80 % der Wörter müssen erkannt werden)
 
 Spracherkennung funktioniert in Chrome/Edge (auch auf Android) und Safari auf dem iPhone; sie braucht Internet und eine https-Adresse.
 

@@ -281,6 +281,37 @@ body.in-session .wrap { padding-bottom: 240px; }
 .sen-en { font-size: 1.35rem; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
 
 .fb-btns { display: flex; gap: 8px; flex: none; }
+
+/* Kreuzworträtsel */
+.cw-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.cw-head .ex-label { margin: 0; }
+.cw-head .linkbtn { margin: 0; padding: 4px 0; flex: none; }
+.cw-wrap { display: flex; justify-content: center; margin: 4px 0 8px; }
+.cw-grid { display: grid; gap: 2px; touch-action: manipulation; }
+.cw-cell {
+  position: relative; width: var(--cell); height: var(--cell); cursor: pointer;
+  background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--muted); border-radius: 4px;
+  transition: background .15s;
+}
+.cw-void { width: var(--cell); height: var(--cell); }
+.cw-cell .num { position: absolute; top: 0; left: 2px; font-size: max(8px, calc(var(--cell) * .3)); line-height: 1.15; color: var(--muted); font-weight: 600; }
+.cw-cell .ch { display: grid; place-items: center; height: 100%; font-weight: 700; font-size: calc(var(--cell) * .55); }
+.cw-cell.hl { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
+.cw-cell.ok { background: var(--ok-soft); color: var(--ok); box-shadow: inset 0 0 0 1.5px var(--ok); }
+.cw-cell.bad { background: var(--bad-soft); box-shadow: inset 0 0 0 2px var(--bad); }
+.cw-clue { min-height: 46px; padding: 10px 14px; border-radius: 12px; background: var(--accent-soft); margin: 4px 0 2px; font-size: .95rem; }
+.cw-clue:empty { visibility: hidden; }
+.cw-clue.ok { background: var(--ok-soft); color: var(--ok-text); }
+.cw-clue.bad { background: var(--bad-soft); color: var(--bad-text); }
+.chip.sel { border-color: var(--accent); background: var(--accent-soft); }
+.chip.shake { animation: shake .3s; border-color: var(--bad); }
+.cw-lists { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 14px; font-size: .9rem; }
+.cw-lists h3 { margin: 0 0 6px; font-size: .9rem; }
+.clues { margin: 0; padding: 0; list-style: none; }
+.clues li { display: flex; gap: 6px; padding: 2px 0; }
+.clues li b { min-width: 1.4em; text-align: right; color: var(--muted); }
+.clues li.done { color: var(--ok); }
+.clues li.done span { text-decoration: line-through; opacity: .7; }
 .ex-line { font-size: .85rem; color: var(--muted); font-style: italic; }
 .steps { padding-left: 20px; margin: 0 0 10px; }
 

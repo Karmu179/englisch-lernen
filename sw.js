@@ -1,5 +1,5 @@
 // Service Worker: macht die App offline nutzbar (Netzwerk zuerst, sonst Cache)
-const CACHE = 'englisch-lernen-v3';
+const CACHE = 'englisch-lernen-v4';
 const FILES = ['./', './index.html', './style.css', './data.js', './app.js', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', e => {

@@ -212,7 +212,7 @@ function sentenceScore(heard, target) {
  */
 const PHASE_TITLE = {
   intro: 'Neue Vokabeln', match: 'Paare finden', speak: 'Vokabeln sprechen',
-  review: 'Alle Paare im Überblick', gap: 'Lückentext', sentences: 'Sätze sprechen',
+  review: 'Alle Paare im Überblick', crossword: 'Kreuzworträtsel', gap: 'Lückentext', sentences: 'Sätze sprechen',
 };
 let session = null;
 
@@ -227,7 +227,7 @@ function sessionWords(opts) {
 function startSession(opts) {
   const words = sessionWords(opts);
   if (!words.length) { toast('Gerade gibt es hier nichts zu üben.'); return; }
-  const phases = ['match', 'speak', 'review', 'gap', 'sentences'];
+  const phases = ['match', 'speak', 'review', 'crossword', 'gap', 'sentences'];
   if (opts.mode === 'learn') phases.unshift('intro');
   session = {
     opts, words, phases, ph: 0, sec: 0, answers: 0, firstTry: 0, firstOk: 0,
@@ -244,6 +244,7 @@ function enterPhase() {
   s.idx = 0; s.queue = [];
   if (p === 'match') s.matchedCount = 0;
   if (p === 'speak') { s.queue = shuffle(s.words); s.round = 1; s.roundWrong = []; }
+  if (p === 'crossword') s.cw = cwMake(s.words);
   if (p === 'gap') s.queue = shuffle(s.words.filter(w => w.ex));
   if (p === 'sentences') {
     const lessonIds = [...new Set(s.words.map(w => w.lesson))];
@@ -287,6 +288,7 @@ function count(ok, first) {
 function phaseFrac() {
   const s = session; const p = s.phases[s.ph];
   if (p === 'match') return s.matchedCount / s.words.length;
+  if (p === 'crossword') return s.cw ? s.cw.slots.filter(x => x.solved).length / s.cw.slots.length : 0;
   if (s.queue && s.queue.length) return s.idx / s.queue.length;
   return 0;
 }
@@ -423,10 +425,92 @@ function answerInput(area, opts) {
   }
 }
 
+/* ---------- Kreuzworträtsel ---------- */
+const CW_WORDS = 8;   // mehr passt auf dem Handy nicht vernünftig
+const cwKey = w => alts(w.en)[0].toUpperCase().replace(/[^A-Z]/g, '');
+const cwPattern = w => alts(w.en)[0].replace(/[?!.,]/g, '').split(' ').map(p => p.length).join(',');
+
+function cwBuild(items) {
+  const first = items.reduce((a, b) => b.key.length > a.key.length ? b : a);
+  const seq = [first, ...shuffle(items.filter(x => x !== first))];
+  const cells = new Map(); const placed = []; const bb = { r1: 0, r2: 0, c1: 0, c2: 0 };
+  const get = (r, c) => cells.get(r + ',' + c);
+  function fits(key, r, c, dir) {
+    const dr = dir === 'd' ? 1 : 0, dc = dir === 'a' ? 1 : 0; let cross = 0;
+    if (get(r - dr, c - dc) || get(r + dr * key.length, c + dc * key.length)) return -1;
+    for (let k = 0; k < key.length; k++) {
+      const rr = r + dr * k, cc = c + dc * k; const cell = get(rr, cc);
+      if (cell) { if (cell.ch !== key[k] || cell.dirs.has(dir)) return -1; cross++; }
+      else if (get(rr + dc, cc + dr) || get(rr - dc, cc - dr)) return -1;
+    }
+    return cross;
+  }
+  function put(it, r, c, dir) {
+    const dr = dir === 'd' ? 1 : 0, dc = dir === 'a' ? 1 : 0;
+    for (let k = 0; k < it.key.length; k++) {
+      const key = (r + dr * k) + ',' + (c + dc * k);
+      let cell = cells.get(key); if (!cell) { cell = { ch: it.key[k], dirs: new Set() }; cells.set(key, cell); }
+      cell.dirs.add(dir);
+    }
+    bb.r1 = Math.min(bb.r1, r); bb.c1 = Math.min(bb.c1, c);
+    bb.r2 = Math.max(bb.r2, r + dr * (it.key.length - 1)); bb.c2 = Math.max(bb.c2, c + dc * (it.key.length - 1));
+    placed.push({ it, r, c, dir });
+  }
+  const score = (W, H) => Math.max(W * 1.3, H) * 10 + W * H * 0.2;   // schmal halten – das Handy ist schmal
+  put(seq[0], 0, 0, Math.random() < 0.5 ? 'a' : 'd');
+  for (const it of seq.slice(1)) {
+    let best = null;
+    for (const [k, cell] of cells) {
+      const [r, c] = k.split(',').map(Number);
+      for (let i = 0; i < it.key.length; i++) {
+        if (it.key[i] !== cell.ch) continue;
+        for (const dir of ['a', 'd']) {
+          if (cell.dirs.has(dir)) continue;
+          const sr = dir === 'd' ? r - i : r, sc = dir === 'a' ? c - i : c;
+          const x = fits(it.key, sr, sc, dir); if (x < 1) continue;
+          const er = dir === 'd' ? sr + it.key.length - 1 : sr, ec = dir === 'a' ? sc + it.key.length - 1 : sc;
+          const W = Math.max(bb.c2, ec) - Math.min(bb.c1, sc) + 1, H = Math.max(bb.r2, er) - Math.min(bb.r1, sr) + 1;
+          const sc2 = score(W, H) - x * 4 + Math.random() * 3;
+          if (!best || sc2 < best.s) best = { s: sc2, r: sr, c: sc, dir };
+        }
+      }
+    }
+    if (!best) return null;
+    put(it, best.r, best.c, best.dir);
+  }
+  return { placed, bb, s: score(bb.c2 - bb.c1 + 1, bb.r2 - bb.r1 + 1) };
+}
+
+// Wählt bis zu 8 Vokabeln des Durchgangs und sucht ein möglichst kompaktes Rätsel
+function cwMake(words) {
+  const items = words.map(w => ({ w, key: cwKey(w) })).filter(x => x.key.length >= 2);
+  if (items.length < 3) return null;
+  let best = null;
+  const t0 = performance.now();
+  for (let t = 0; t < 8; t++) {
+    const pick = shuffle(items).slice(0, CW_WORDS);
+    for (let k = 0; k < 25; k++) { const r = cwBuild(pick); if (r && (!best || r.s < best.s)) best = r; }
+    if (best && performance.now() - t0 > 250) break;   // langsame Geräte nicht warten lassen
+  }
+  if (!best) return null;
+  const { bb } = best;
+  const starts = [...new Set(best.placed.map(p => (p.r - bb.r1) + ',' + (p.c - bb.c1)))]
+    .map(k => k.split(',').map(Number)).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const numAt = Object.fromEntries(starts.map((s, i) => [s.join(','), i + 1]));
+  const cellSlots = {};
+  const slots = best.placed.map((p, i) => {
+    const r = p.r - bb.r1, c = p.c - bb.c1; const cells = [];
+    for (let k = 0; k < p.it.key.length; k++) cells.push(p.dir === 'd' ? [r + k, c] : [r, c + k]);
+    cells.forEach(([a, b]) => { (cellSlots[a + ',' + b] = cellSlots[a + ',' + b] || []).push(i); });
+    return { i, w: p.it.w, key: p.it.key, dir: p.dir, len: p.it.key.length, cells, num: numAt[r + ',' + c], solved: false };
+  });
+  return { rows: bb.r2 - bb.r1 + 1, cols: bb.c2 - bb.c1 + 1, slots, cellSlots, numAt, mistakes: 0 };
+}
+
 /* ---------- Schritte ---------- */
 const PH = {
   intro(el) { pairList(el, 'Lies die neuen Vokabeln. Tippe auf ein englisches Wort, um es zu hören.', 'Los geht’s'); },
-  review(el) { pairList(el, 'Alle Vokabeln noch einmal im Überblick. Tippe zum Anhören.', 'Weiter zum Lückentext'); },
+  review(el) { pairList(el, 'Alle Vokabeln noch einmal im Überblick. Tippe zum Anhören.', 'Weiter zum Rätsel'); },
 
   match(el) {
     const s = session;
@@ -498,6 +582,125 @@ const PH = {
     const pool = [...shuffle(s.words), ...shuffle(WORDS.filter(x => x.lesson === w.lesson))].filter(x => x.id !== w.id).map(x => alts(x.en)[0]);
     const chips = shuffle([alts(w.en)[0], ...[...new Set(pool)].slice(0, 5)]);
     answerInput($('#area'), { chips, placeholder: 'Wort hierher ziehen oder antippen', onAnswer: judge, footerExtra: setFooter });
+  },
+
+  crossword(el) {
+    const s = session; const cw = s.cw;
+    if (!cw) { nextPhase(); return; }
+    // Kästchengröße: passt in die Breite und nimmt höchstens ~45 % der Bildschirmhöhe ein
+    const availW = Math.min(document.documentElement.clientWidth - 32, 560);
+    const availH = Math.max(230, window.innerHeight * 0.5);
+    const size = Math.max(18, Math.min(40,
+      Math.floor((availW - (cw.cols - 1) * 2) / cw.cols),
+      Math.floor((availH - (cw.rows - 1) * 2) / cw.rows)));
+    const solvedAt = {};
+    cw.slots.filter(x => x.solved).forEach(x => x.cells.forEach(([r, c], k) => { solvedAt[r + ',' + c] = x.key[k]; }));
+    let grid = '';
+    for (let r = 0; r < cw.rows; r++) for (let c = 0; c < cw.cols; c++) {
+      const k = r + ',' + c;
+      grid += cw.cellSlots[k]
+        ? `<div class="cw-cell${solvedAt[k] ? ' ok' : ''}" data-k="${k}">${cw.numAt[k] ? `<span class="num">${cw.numAt[k]}</span>` : ''}<span class="ch">${solvedAt[k] || ''}</span></div>`
+        : '<div class="cw-void"></div>';
+    }
+    const clueList = d => cw.slots.filter(x => x.dir === d).sort((a, b) => a.num - b.num)
+      .map(x => `<li class="${x.solved ? 'done' : ''}"><b>${x.num}</b><span>${esc(show(x.w.de))} <small>(${cwPattern(x.w)})</small></span></li>`).join('');
+    el.innerHTML = `<div class="cw-head"><p class="ex-label">Wörter ins Rätsel ziehen oder antippen</p><button class="linkbtn" id="skip">Überspringen</button></div>
+      <div class="cw-wrap"><div class="cw-grid" id="cwGrid" style="--cell:${size}px;grid-template-columns:repeat(${cw.cols},${size}px)">${grid}</div></div>
+      <div class="cw-clue" id="cwClue" aria-live="polite"></div>
+      <div class="bank" id="bank"></div>
+      <div class="cw-lists card">
+        <div><h3>Waagerecht</h3><ol class="clues">${clueList('a')}</ol></div>
+        <div><h3>Senkrecht</h3><ol class="clues">${clueList('d')}</ol></div>
+      </div>`;
+    footer('');
+    $('#skip').onclick = nextPhase;
+
+    let sel = null, lastShown = null;
+    const cellEl = ([r, c]) => el.querySelector(`.cw-cell[data-k="${r},${c}"]`);
+    const clue = (html, cls = '') => { const c = $('#cwClue'); c.className = 'cw-clue ' + cls; c.innerHTML = html; };
+    const slotText = x => `<b>${x.num} ${x.dir === 'a' ? 'waagerecht' : 'senkrecht'}:</b> ${esc(show(x.w.de))} (${cwPattern(x.w)})`;
+    const highlight = x => {
+      el.querySelectorAll('.cw-cell.hl').forEach(e => e.classList.remove('hl'));
+      if (x) x.cells.forEach(rc => { const e = cellEl(rc); if (!e.classList.contains('ok')) e.classList.add('hl'); });
+    };
+    // Bei Kreuzungen das Feld nehmen, dessen Länge zum Wort passt
+    const pickSlot = (k, len, other) => {
+      const open = (cw.cellSlots[k] || []).map(i => cw.slots[i]).filter(x => !x.solved);
+      if (len) return open.find(x => x.len === len) || open[0] || null;
+      return (other && open.length > 1 && open[0] === other) ? open[1] : open[0] || null;
+    };
+    const drawBank = () => {
+      $('#bank').innerHTML = shuffle(cw.slots.filter(x => !x.solved)).map(x => `<button class="chip" data-i="${x.i}">${esc(alts(x.w.en)[0])}</button>`).join('');
+    };
+    const place = (ws, target) => {
+      highlight(null);
+      if (!target) return;
+      const ok = target === ws || target.key === ws.key;
+      count(ok, false);
+      if (ok) {
+        target.solved = true;
+        target.cells.forEach((rc, k) => { const e = cellEl(rc); e.classList.add('ok'); e.querySelector('.ch').textContent = target.key[k]; });
+        renderLists();
+        speak(target.w.en);
+        drawBank(); updateProgress();
+        const left = cw.slots.filter(x => !x.solved).length;
+        if (!left) {
+          clue('');
+          feedback(true, 'Rätsel gelöst!', [cw.mistakes ? `Mit ${cw.mistakes} Fehlversuch${cw.mistakes > 1 ? 'en' : ''}.` : 'Ohne einen einzigen Fehler.'], '', nextPhase);
+        } else clue(`<b>Richtig:</b> ${pairHtml(target.w)} · noch ${left}`, 'ok');
+      } else {
+        cw.mistakes++;
+        target.cells.forEach(rc => { const e = cellEl(rc); if (!e.classList.contains('ok')) { e.classList.add('bad'); setTimeout(() => e.classList.remove('bad'), 700); } });
+        const chip = el.querySelector(`.chip[data-i="${ws.i}"]`);
+        if (chip) { chip.classList.add('shake'); setTimeout(() => chip.classList.remove('shake'), 400); }
+        clue(target.len !== ws.len
+          ? `„${esc(alts(ws.w.en)[0])}“ passt nicht – dieses Feld hat ${target.len} Buchstaben.`
+          : `„${esc(alts(ws.w.en)[0])}“ ist hier falsch. Gesucht: ${esc(show(target.w.de))}.`, 'bad');
+      }
+    };
+    const renderLists = () => {
+      const lists = el.querySelectorAll('.cw-lists .clues');
+      lists[0].innerHTML = clueList('a'); lists[1].innerHTML = clueList('d');
+    };
+    const cellAt = (x, y) => { const t = document.elementFromPoint(x, y); const c = t && t.closest('.cw-cell'); return c ? c.dataset.k : null; };
+
+    $('#bank').addEventListener('pointerdown', e => {
+      const b = e.target.closest('.chip'); if (!b) return;
+      e.preventDefault();
+      const ws = cw.slots[+b.dataset.i]; const sx = e.clientX, sy = e.clientY; let ghost = null, target = null;
+      const move = ev => {
+        if (!ghost && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 8) {
+          ghost = b.cloneNode(true); ghost.classList.add('ghost'); document.body.appendChild(ghost); b.classList.add('dragging');
+        }
+        if (!ghost) return;
+        ghost.style.left = ev.clientX + 'px'; ghost.style.top = ev.clientY + 'px';
+        const k = cellAt(ev.clientX, ev.clientY - 28);   // knapp über dem Finger, damit er das Feld nicht verdeckt
+        target = k ? pickSlot(k, ws.len) : null;
+        highlight(target);
+        if (target) clue(slotText(target));
+      };
+      const up = ev => {
+        removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+        if (ghost) { ghost.remove(); b.classList.remove('dragging'); if (ev.type === 'pointerup') place(ws, target); else highlight(null); }
+        else if (ev.type === 'pointerup') {
+          el.querySelectorAll('.chip.sel').forEach(c => c.classList.remove('sel'));
+          if (sel === ws) { sel = null; return; }
+          sel = ws; b.classList.add('sel');
+          clue(`„${esc(alts(ws.w.en)[0])}“ ausgewählt – jetzt ein Kästchen antippen.`);
+        }
+      };
+      addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+    });
+    $('#cwGrid').addEventListener('click', e => {
+      const c = e.target.closest('.cw-cell'); if (!c) return;
+      if (sel) { const ws = sel; sel = null; place(ws, pickSlot(c.dataset.k, ws.len)); return; }
+      const x = pickSlot(c.dataset.k, 0, lastShown); lastShown = x;
+      highlight(x); if (x) clue(slotText(x));
+    });
+
+    drawBank();
+    const firstOpen = cw.slots.filter(x => !x.solved).sort((a, b) => a.num - b.num)[0];
+    if (firstOpen) { highlight(firstOpen); clue(slotText(firstOpen)); lastShown = firstOpen; }
   },
 
   gap(el) {
@@ -788,6 +991,7 @@ function viewSettings() {
         <li>Paare finden – richtige Paare verschwinden</li>
         <li>Lernkarten: deutsches Wort sehen, englisch sagen. Was nicht klappt, kommt danach noch einmal.</li>
         <li>Alle Paare noch einmal im Überblick</li>
+        <li>Kreuzworträtsel mit bis zu 8 Vokabeln – Wörter ins Gitter ziehen</li>
         <li>Lückentext</li>
         <li>Sätze laut sprechen</li>
       </ol>
