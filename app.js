@@ -20,6 +20,9 @@ const ICON = {
   mic: '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg>',
   close: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
+  check: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  cross: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>',
+  arrow: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
 };
 
 /* ================= Hilfsfunktionen ================= */
@@ -301,22 +304,98 @@ function footer(html, cls = '', onNext) {
 
 const pairHtml = w => `<b>${esc(show(w.en))}</b> = ${esc(show(w.de))}`;
 
-/* ---------- Eingabe: Mikrofon oder Tastatur ---------- */
+// Einheitliche Rückmeldung: grün bei richtig, rot bei falsch
+function feedback(ok, title, lines, extraBtns, onNext) {
+  footer(`<div class="fb-head">
+      <span class="fb-icon">${ok ? ICON.check : ICON.cross}</span>
+      <div class="fb-msg"><strong>${title}</strong>${lines.filter(Boolean).map(l => `<span>${l}</span>`).join('')}</div>
+    </div>
+    <div class="fb-btns">${extraBtns || ''}<button class="btn next ${ok ? 'ok' : 'bad'}" id="next">Weiter ${ICON.arrow}</button></div>`,
+    'fb ' + (ok ? 'ok' : 'bad'), onNext);
+}
+
+/* ---------- Wortbausteine: ziehen oder antippen ---------- */
+const inside = (el, ev) => {
+  const r = el.getBoundingClientRect(); const pad = 18;
+  return ev.clientX >= r.left - pad && ev.clientX <= r.right + pad && ev.clientY >= r.top - pad && ev.clientY <= r.bottom + pad;
+};
+function chipBoard(zone, bank, chips, o = {}) {
+  const placed = []; let locked = false;
+  function draw() {
+    zone.innerHTML = placed.length
+      ? placed.map((k, pos) => `<button class="chip in" data-pos="${pos}" aria-label="${esc(chips[k])} entfernen">${esc(chips[k])}</button>`).join('')
+      : `<span class="zone-ph">${esc(o.placeholder || '')}</span>`;
+    bank.innerHTML = chips.map((c, k) => placed.includes(k)
+      ? `<button class="chip used" disabled tabindex="-1" aria-hidden="true">${esc(c)}</button>`
+      : `<button class="chip" data-k="${k}">${esc(c)}</button>`).join('');
+    if (o.onChange) o.onChange(placed.map(k => chips[k]));
+  }
+  function place(k) {
+    if (locked || placed.includes(k)) return;
+    if (o.multi) placed.push(k); else placed.splice(0, placed.length, k);
+    draw();
+  }
+  zone.addEventListener('click', e => {
+    const b = e.target.closest('.chip'); if (!b || locked) return;
+    placed.splice(+b.dataset.pos, 1); draw();
+  });
+  bank.addEventListener('pointerdown', e => {
+    const b = e.target.closest('.chip'); if (!b || b.disabled || locked || b.dataset.k === undefined) return;
+    e.preventDefault();
+    const k = +b.dataset.k; const sx = e.clientX, sy = e.clientY; let ghost = null;
+    const move = ev => {
+      if (!ghost && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 8) {
+        ghost = b.cloneNode(true); ghost.classList.add('ghost'); document.body.appendChild(ghost);
+        b.classList.add('dragging');
+      }
+      if (ghost) {
+        ghost.style.left = ev.clientX + 'px'; ghost.style.top = ev.clientY + 'px';
+        zone.classList.toggle('over', inside(zone, ev));
+      }
+    };
+    const up = ev => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+      if (ghost) {
+        ghost.remove(); b.classList.remove('dragging'); zone.classList.remove('over');
+        if (ev.type === 'pointerup' && inside(zone, ev)) place(k);
+      } else if (ev.type === 'pointerup') place(k);   // einfach angetippt
+    };
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  });
+  bank.addEventListener('keydown', e => {
+    const b = e.target.closest('.chip');
+    if (b && b.dataset.k !== undefined && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); place(+b.dataset.k); }
+  });
+  draw();
+  return {
+    value: () => placed.map(k => chips[k]),
+    lock: () => { locked = true; zone.classList.add('locked'); bank.querySelectorAll('.chip').forEach(c => { c.disabled = true; }); },
+  };
+}
+
+/* ---------- Eingabe: Mikrofon oder Wortbausteine ---------- */
 function answerInput(area, opts) {
-  // opts: { placeholder, onAnswer(list, typed:boolean) }
+  // opts: { chips, multi, placeholder, onAnswer(list, chosen:boolean), footerExtra }
   const s = session;
   if (s.typeMode) {
-    area.innerHTML = `<input id="answer" class="answer" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" placeholder="${esc(opts.placeholder)}" aria-label="Deine Antwort">
-      ${SR ? '<button class="linkbtn" id="toSpeak">Lieber sprechen</button>' : '<p class="muted small center">Spracherkennung wird von diesem Browser nicht unterstützt – bitte schreiben.</p>'}`;
-    const inp = $('#answer'); inp.focus();
-    opts.footerExtra('<button class="btn primary" id="check">Prüfen</button>');
-    $('#check').onclick = () => { const v = inp.value.trim(); if (!v) { inp.focus(); return; } inp.disabled = true; opts.onAnswer([v], true); };
+    area.innerHTML = `<div class="zone${opts.multi ? ' multi' : ''}" id="zone"></div>
+      <div class="bank" id="bank"></div>
+      ${SR ? '<button class="linkbtn" id="toSpeak">Lieber sprechen</button>' : '<p class="muted small center">Spracherkennung wird von diesem Browser nicht unterstützt.</p>'}`;
+    opts.footerExtra('<button class="btn primary" id="check" disabled>Prüfen</button>');
+    const board = chipBoard($('#zone'), $('#bank'), opts.chips, {
+      multi: opts.multi, placeholder: opts.placeholder,
+      onChange: v => { const c = $('#check'); if (c) c.disabled = opts.multi ? v.length !== opts.chips.length : !v.length; },
+    });
+    $('#check').onclick = () => {
+      const v = board.value(); if (!v.length || s.answered) return;
+      board.lock(); opts.onAnswer([v.join(' ')], true);
+    };
     const ts = $('#toSpeak'); if (ts) ts.onclick = () => { s.typeMode = false; renderSession(); };
   } else {
     area.innerHTML = `<div class="mic-wrap">
         <button class="mic" id="mic" aria-label="Mikrofon: jetzt sprechen">${ICON.mic}</button>
         <p class="mic-status muted" id="micStatus" aria-live="polite">Tippe aufs Mikrofon und sprich.</p>
-        <button class="linkbtn" id="toType">Ich kann gerade nicht sprechen – schreiben</button>
+        <button class="linkbtn" id="toType">Ich kann gerade nicht sprechen – Antwort auswählen</button>
       </div>`;
     opts.footerExtra('');
     const status = $('#micStatus'); const btn = $('#mic');
@@ -332,12 +411,12 @@ function answerInput(area, opts) {
       } catch (err) {
         btn.classList.remove('on');
         if (err === 'not-allowed' || err === 'service-not-allowed') {
-          toast('Kein Zugriff aufs Mikrofon – du kannst die Antwort schreiben.');
+          toast('Kein Zugriff aufs Mikrofon – du kannst die Antwort auswählen.');
           s.typeMode = true; renderSession();
         } else if (err === 'no-speech') status.textContent = 'Ich habe nichts gehört. Tippe noch einmal aufs Mikrofon.';
         else if (err === 'network') status.textContent = 'Die Spracherkennung braucht eine Internetverbindung.';
         else if (err === 'aborted') status.textContent = 'Tippe aufs Mikrofon und sprich.';
-        else status.textContent = 'Spracherkennung nicht möglich (' + err + '). Du kannst auch schreiben.';
+        else status.textContent = 'Spracherkennung nicht möglich (' + err + '). Du kannst die Antwort auch auswählen.';
       }
     };
     $('#toType').onclick = () => { stopRecog(); s.typeMode = true; renderSession(); };
@@ -396,7 +475,7 @@ const PH = {
     const setFooter = x => { extra = x; footer(`<button class="btn ghost" id="skip">Weiß ich nicht</button>${extra}`); $('#skip').onclick = () => judge([], false, true); };
     const judge = (answers, typed, skipped) => {
       if (s.answered) return; s.answered = true; stopRecog();
-      const ok = !skipped && (typed ? checkTyped(answers[0], w.en) !== false : matchSpoken(answers, w.en));
+      const ok = !skipped && (typed ? alts(w.en).some(a => norm(a) === norm(answers[0])) : matchSpoken(answers, w.en));
       const first = s.round === 1;
       count(ok, first);
       $('#area').hidden = true;
@@ -405,10 +484,9 @@ const PH = {
       card.classList.add(ok ? 'ok' : 'bad');
       speak(w.en);
       if (!ok) { s.roundWrong.push(w); if (first) s.speakWrong.add(w.id); }
-      const heard = !typed && !skipped && answers[0] ? `<span class="small">Verstanden: „${esc(answers[0])}“</span>` : '';
-      footer(`<div class="fb-msg"><strong>${ok ? 'Richtig' : 'Nicht ganz'}</strong><span>${pairHtml(w)}</span>${heard}</div>
-        <div class="fb-btns">${!ok && !skipped ? '<button class="btn ghost" id="override">Das war richtig</button>' : ''}<button class="btn ${ok ? 'primary' : 'danger'}" id="next">Weiter</button></div>`,
-        ok ? 'ok' : 'bad', advanceSpeak);
+      const heard = !skipped && answers[0] ? `<small>${typed ? 'Deine Wahl' : 'Verstanden'}: „${esc(answers[0])}“</small>` : '';
+      feedback(ok, ok ? 'Richtig!' : 'Leider falsch', [pairHtml(w), ok ? '' : heard, ok ? '' : '<small>Diese Vokabel kommt gleich noch einmal.</small>'],
+        !ok && !skipped && !typed ? '<button class="btn ghost" id="override">Das war richtig</button>' : '', advanceSpeak);
       const ov = $('#override');
       if (ov) ov.onclick = () => {
         s.roundWrong.pop(); if (first) s.speakWrong.delete(w.id);
@@ -417,34 +495,46 @@ const PH = {
       };
     };
     setFooter('');
-    answerInput($('#area'), { placeholder: 'Auf Englisch …', onAnswer: judge, footerExtra: setFooter });
+    const pool = [...shuffle(s.words), ...shuffle(WORDS.filter(x => x.lesson === w.lesson))].filter(x => x.id !== w.id).map(x => alts(x.en)[0]);
+    const chips = shuffle([alts(w.en)[0], ...[...new Set(pool)].slice(0, 5)]);
+    answerInput($('#area'), { chips, placeholder: 'Wort hierher ziehen oder antippen', onAnswer: judge, footerExtra: setFooter });
   },
 
   gap(el) {
     const s = session; const w = s.queue[s.idx]; s.answered = false;
-    const [pre, g, post] = exParts(w.ex); const target = alts(g)[0];
-    el.innerHTML = `<p class="ex-label">Setze das fehlende Wort ein</p>
-      <p class="gap-sentence">${esc(pre)}<input id="answer" class="gap-input" style="width:${Math.max(5, target.length + 2)}ch" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" aria-label="fehlendes Wort">${esc(post)}</p>
+    const [pre, g, post] = exParts(w.ex);
+    // Steht die Lücke am Satzanfang, beginnen alle Auswahlwörter groß – sonst würde die Großschreibung die Lösung verraten
+    const atStart = pre.trim() === '';
+    const fix = t => atStart ? t[0].toUpperCase() + t.slice(1) : t;
+    const target = fix(alts(g)[0]);
+    const others = [...shuffle(s.words), ...shuffle(WORDS.filter(x => x.lesson === w.lesson))]
+      .filter(x => x.id !== w.id && x.ex)
+      .map(x => {
+        const [p2, g2] = exParts(x.ex); let t = alts(g2)[0];
+        if (p2.trim() === '' && !/^(I|Monday|Friday|Sunday)\b/.test(t)) t = t[0].toLowerCase() + t.slice(1);
+        return fix(t);
+      });
+    const distract = [...new Set(others)].filter(t => !alts(g).some(a => norm(a) === norm(t))).slice(0, 5);
+    const chips = shuffle([target, ...distract]);
+    el.innerHTML = `<p class="ex-label">Zieh das passende Wort in die Lücke – oder tippe es an</p>
+      <p class="gap-sentence">${esc(pre)}<span class="zone gap-slot" id="zone"></span>${esc(post)}</p>
       <p class="muted center">${esc(w.exDe)}</p>
-      <p class="hint center small" id="hint" aria-live="polite"></p>
+      <div class="bank" id="bank"></div>
       <p class="muted small center">${s.idx + 1} von ${s.queue.length}</p>`;
-    footer('<button class="btn ghost" id="tip">Tipp</button><button class="btn primary" id="check">Prüfen</button>');
-    const inp = $('#answer'); inp.focus();
-    $('#tip').onclick = () => { $('#hint').textContent = `Gesucht: ${show(w.de)} – beginnt mit „${target.slice(0, 2)}…“`; inp.focus(); };
+    footer('<button class="btn primary" id="check" disabled>Prüfen</button>');
+    const board = chipBoard($('#zone'), $('#bank'), chips, { onChange: v => { const c = $('#check'); if (c) c.disabled = !v.length; } });
     $('#check').onclick = () => {
-      if (s.answered) return;
-      const v = inp.value.trim(); if (!v) { inp.focus(); return; }
-      s.answered = true; inp.disabled = true;
-      const r = checkTyped(v, g); const ok = !!r;
+      const v = board.value()[0];
+      if (s.answered || !v) return;
+      s.answered = true; board.lock();
+      const ok = alts(g).some(a => norm(a) === norm(v));
       const first = !s.gapSeen.has(w.id); s.gapSeen.add(w.id);
       count(ok, first);
-      inp.classList.add(ok ? 'ok' : 'bad');
+      $('#zone').classList.add(ok ? 'ok' : 'bad');
       if (!ok) { s.gapWrong.add(w.id); s.queue.push(w); }
       autoSay(exPlain(w.ex));
       const full = `${esc(pre)}<b>${esc(target)}</b>${esc(post)}`;
-      const msg = r === 'typo' ? `Fast richtig – achte auf die Schreibweise: <b>${esc(target)}</b>` : ok ? full : `Richtig ist: ${full}`;
-      footer(`<div class="fb-msg"><strong>${ok ? 'Richtig' : 'Nicht ganz'}</strong><span>${msg}</span>${ok ? '' : '<span class="small">Dieser Satz kommt am Ende noch einmal.</span>'}</div>
-        <button class="btn ${ok ? 'primary' : 'danger'}" id="next">Weiter</button>`, ok ? 'ok' : 'bad',
+      feedback(ok, ok ? 'Richtig!' : 'Leider falsch', [ok ? full : `Richtig ist: ${full}`, ok ? '' : '<small>Dieser Satz kommt am Ende noch einmal.</small>'], '',
         () => { s.idx++; if (s.idx >= s.queue.length) nextPhase(); else renderSession(); });
     };
   },
@@ -454,7 +544,7 @@ const PH = {
     if (!s.queue.length) { nextPhase(); return; }
     const sen = s.queue[s.idx]; s.answered = false;
     const typing = s.typeMode;
-    el.innerHTML = `<p class="ex-label">${typing ? 'Schreib den Satz auf Englisch' : 'Sprich den Satz laut nach'}</p>
+    el.innerHTML = `<p class="ex-label">${typing ? 'Bilde den Satz auf Englisch' : 'Sprich den Satz laut nach'}</p>
       <div class="sentence-card">
         ${typing ? '' : `<div class="sen-en">${esc(sen.en)} ${sayBtn(sen.en)}</div>`}
         <div class="${typing ? 'sen-en' : 'muted'}">${esc(sen.de)}</div>
@@ -469,21 +559,22 @@ const PH = {
     const judge = (answers, typed) => {
       if (s.answered) return; s.answered = true; stopRecog();
       $('#area').hidden = true;
-      const score = Math.max(...answers.map(a => sentenceScore(a, sen.en)));
-      const ok = score >= SENTENCE_PASS;
+      // Gesprochen: mind. 80 % der Wörter erkannt. Gebaut: Reihenfolge muss stimmen.
+      const score = typed ? (norm(answers[0]) === norm(sen.en) ? 1 : 0) : Math.max(...answers.map(a => sentenceScore(a, sen.en)));
+      const ok = typed ? score === 1 : score >= SENTENCE_PASS;
       const first = s.tries === 0; s.tries++;
       count(ok, first);
       if (first) { s.sentTotal++; if (ok) s.sentOk++; }
       autoSay(sen.en);
-      const heard = `<span class="small">${typed ? 'Geschrieben' : 'Verstanden'}: „${esc(answers[0])}“ · ${Math.round(score * 100)} % der Wörter</span>`;
-      footer(`<div class="fb-msg"><strong>${ok ? 'Gut gesprochen' : 'Noch nicht ganz'}</strong>${ok ? '' : `<span>${esc(sen.en)}</span>`}${heard}</div>
-        <div class="fb-btns">${ok ? '' : '<button class="btn ghost" id="again">Nochmal</button>'}<button class="btn ${ok ? 'primary' : 'danger'}" id="next">Weiter</button></div>`,
-        ok ? 'ok' : 'bad', go);
-      if (typing) $('.sentence-card').insertAdjacentHTML('beforeend', `<div class="muted">${esc(sen.en)}</div>`);
+      const heard = typed ? `<small>Deine Lösung: „${esc(answers[0])}“</small>`
+        : `<small>Verstanden: „${esc(answers[0])}“ · ${Math.round(score * 100)} % der Wörter</small>`;
+      feedback(ok, ok ? (typed ? 'Richtig!' : 'Gut gesprochen!') : 'Noch nicht ganz', [ok ? esc(sen.en) : `Richtig ist: <b>${esc(sen.en)}</b>`, ok ? '' : heard],
+        ok ? '' : '<button class="btn ghost" id="again">Nochmal</button>', go);
       const ag = $('#again'); if (ag) ag.onclick = () => renderSession();
     };
     setFooter('');
-    answerInput($('#area'), { placeholder: 'Satz auf Englisch …', onAnswer: judge, footerExtra: setFooter });
+    const chips = shuffle(sen.en.split(' ').map(t => t.replace(/[.,!?]+$/, '')));
+    answerInput($('#area'), { chips, multi: true, placeholder: 'Wörter in der richtigen Reihenfolge antippen oder hierher ziehen', onAnswer: judge, footerExtra: setFooter });
     if (!typing) autoSay(sen.en);
   },
 };
@@ -504,7 +595,7 @@ function pairList(el, text, nextLabel) {
     <div class="pairs">${s.words.map(w => `<div class="pair">
       <button class="pair-en" data-say="${esc(alts(w.en)[0])}">${canSpeak ? ICON.speakerSm : ''}<span>${esc(show(w.en))}</span></button>
       <span class="pair-de">${esc(show(w.de))}</span></div>`).join('')}</div>`;
-  footer(`<span class="fb-msg"></span><button class="btn primary" id="next">${nextLabel}</button>`, '', nextPhase);
+  footer(`<div class="fb-btns"><button class="btn next primary" id="next">${nextLabel} ${ICON.arrow}</button></div>`, 'fb plain', nextPhase);
 }
 
 function renderSession() {
